@@ -125,3 +125,43 @@ type nopCloserReaderAt struct {
 }
 
 func (nopCloserReaderAt) Close() error { return nil }
+
+// fuzzMaxIdxLen caps the byte length of a single idx fuzz input.
+// libFuzzer's RSS budget on OSS-Fuzz is ~2.5 GiB, and `MemoryIndex`
+// loads the entire idx into memory, so unbounded input length plus
+// allocations sized from the declared object count would push the
+// process over its limit across many iterations. 64 KiB is enough
+// to cover all reasonable structurally-valid prefixes without
+// admitting pathological growth.
+const fuzzMaxIdxLen = 1 << 16
+
+// idxV2DeclaredSizeIsPlausible reports whether data's declared object
+// count (idx v2 fanout[255]) is consistent with len(data). Mirrors
+// the size validation in canonical Git's load_idx[1]: reject inputs
+// whose declared `nr` would require more bytes than the input
+// actually contains, since the eager `MemoryIndex.Decode` allocates
+// buckets-sized buffers before the trailing ReadFull aborts.
+//
+// Returns true for inputs too short to inspect — the decoder rejects
+// those naturally on its own.
+//
+// [1]: https://github.com/git/git/blob/v2.54.0/packfile.c#L246-L251
+func idxV2DeclaredSizeIsPlausible(data []byte, hashSize int) bool {
+	const (
+		magicLen   = 4
+		versionLen = 4
+		fanoutLen  = 256 * 4
+	)
+	headerLen := magicLen + versionLen + fanoutLen
+	if len(data) < headerLen {
+		return true
+	}
+
+	nr := binary.BigEndian.Uint32(data[headerLen-4 : headerLen])
+	// Minimum on-the-wire size: header + nr * (hash + crc32 + offset32) +
+	// pack-checksum + idx-checksum.
+	minSize := uint64(headerLen) +
+		uint64(nr)*uint64(hashSize+4+4) +
+		uint64(2*hashSize)
+	return uint64(len(data)) >= minSize
+}

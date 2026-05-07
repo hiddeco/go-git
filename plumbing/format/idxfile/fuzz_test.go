@@ -3,6 +3,7 @@ package idxfile
 import (
 	"bytes"
 	"crypto"
+	"crypto/sha1"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -96,6 +97,19 @@ func FuzzMemoryIndex(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(_ *testing.T, idxData []byte) {
+		// Cap input length and require the declared object count to
+		// match the byte size before invoking the eager decoder. Both
+		// guards exist because `MemoryIndex.Decode` allocates buffers
+		// sized from the fanout total before reading them, so an idx
+		// claiming many objects in a small body would push the
+		// process over libFuzzer's RSS budget across iterations.
+		if len(idxData) > fuzzMaxIdxLen {
+			return
+		}
+		if !idxV2DeclaredSizeIsPlausible(idxData, sha1.Size) {
+			return
+		}
+
 		idx := new(MemoryIndex)
 		d := NewDecoder(bytes.NewReader(idxData), hash.New(crypto.SHA1))
 		if err := d.Decode(idx); err != nil {
