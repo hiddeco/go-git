@@ -1,7 +1,6 @@
 package git
 
 import (
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +15,19 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
+
+// pathTestCase describes a tree to craft for path-validation tests.
+// path is the leaf entry's tree path (nested paths use '/' to build
+// nested tree objects). mode and content describe the leaf entry \u2014
+// for symlinks, content is the raw symlink target.
+type pathTestCase struct {
+	name    string
+	path    string
+	mode    filemode.FileMode
+	content []byte
+	config  map[string]string
+	wantErr bool
+}
 
 // TestPathValidationRejectsDangerousResets verifies that go-git rejects
 // resetting onto commits that contain dangerous paths. For each case, a
@@ -34,68 +46,216 @@ func TestPathValidationRejectsDangerousResets(t *testing.T) {
 	}
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		// path is the file path to place in the crafted commit's tree.
-		// Nested paths (containing /) are built as nested tree objects.
-		path string
-		// config overrides to set on the repository before resetting.
-		config map[string]string
-		// onlyOnGOOS, when set, skips the case unless runtime.GOOS matches.
-		onlyOnGOOS string
-	}{
+	tests := []pathTestCase{
 		{
-			name: ".git at root",
-			path: ".git/config",
+			name:    ".git at root",
+			path:    ".git/config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			wantErr: true,
 		},
 		{
-			name: ".git in subdirectory",
-			path: "subdir/.git/config",
+			name:    ".git in subdirectory",
+			path:    "subdir/.git/config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			wantErr: true,
 		},
 		{
-			name: "git~1 8.3 short name",
-			path: "git~1/config",
+			name:    ".git as final-position regular file",
+			path:    "submodule/.git",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			wantErr: true,
 		},
 		{
-			name:   "NTFS trailing space on .git",
-			path:   ".git /config",
-			config: map[string]string{"core.protectNTFS": "true"},
+			name:    "git~1 8.3 short name",
+			path:    "git~1/config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			wantErr: true,
 		},
 		{
-			name:   "NTFS trailing dot on .git",
-			path:   ".git./config",
-			config: map[string]string{"core.protectNTFS": "true"},
+			name:    "NTFS trailing space on .git",
+			path:    ".git /config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
 		},
 		{
-			name:   "NTFS alternate data stream",
-			path:   ".git::$INDEX_ALLOCATION/config",
-			config: map[string]string{"core.protectNTFS": "true"},
+			name:    "NTFS trailing dot on .git",
+			path:    ".git./config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
 		},
 		{
-			name:   "NTFS reserved device name CON",
-			path:   "CON/file",
-			config: map[string]string{"core.protectNTFS": "true"},
+			name:    "NTFS alternate data stream",
+			path:    ".git::$INDEX_ALLOCATION/config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
 		},
 		{
-			name:   "NTFS reserved device name NUL",
-			path:   "NUL",
-			config: map[string]string{"core.protectNTFS": "true"},
+			name:    "NTFS reserved device name CON",
+			path:    "CON/file",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
 		},
 		{
-			name:   "HFS+ zero-width character in .git",
-			path:   ".g\u200cit/config",
-			config: map[string]string{"core.protectHFS": "true"},
+			name:    "NTFS reserved device name NUL",
+			path:    "NUL",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "HFS+ zero-width character in .git",
+			path:    ".g\u200cit/config",
+			mode:    filemode.Regular,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectHFS": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "symlink with absolute target",
+			path:    "innocent",
+			mode:    filemode.Symlink,
+			content: []byte("/etc/passwd"),
+			wantErr: true,
+		},
+		{
+			name:    "symlink with .git target",
+			path:    "innocent",
+			mode:    filemode.Symlink,
+			content: []byte(".git/config"),
+			wantErr: true,
+		},
+		{
+			name:    "symlink with parent-traversal target",
+			path:    "innocent",
+			mode:    filemode.Symlink,
+			content: []byte("../escape"),
+			wantErr: true,
+		},
+		{
+			name:    "symlink named .gitmodules",
+			path:    ".gitmodules",
+			mode:    filemode.Symlink,
+			content: []byte("payload"),
+			wantErr: true,
+		},
+		{
+			name:    "symlink named .gitmodules with NTFS trailing space",
+			path:    ".gitmodules ",
+			mode:    filemode.Symlink,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "symlink named gitmod~1",
+			path:    "gitmod~1",
+			mode:    filemode.Symlink,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectNTFS": "true"},
+			wantErr: true,
+		},
+		{
+			name:    "symlink with HFS-equivalent .gitmodules",
+			path:    ".g\u200citmodules",
+			mode:    filemode.Symlink,
+			content: []byte("payload"),
+			config:  map[string]string{"core.protectHFS": "true"},
+			wantErr: true,
 		},
 	}
+
+	runResetCases(t, tests)
+}
+
+// TestResetAcceptsLegitPaths verifies that legitimate Unicode paths
+// and well-formed relative symlink targets pass validation, so that
+// the conformance tests above don't silently turn into "rejects
+// everything" via over-broad checks.
+func TestResetAcceptsLegitPaths(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping path validation conformance test in short mode")
+	}
+	t.Parallel()
+
+	tests := []pathTestCase{
+		{
+			name:    "high-codepoint Unicode path",
+			path:    "\u00c7ircle/file",
+			mode:    filemode.Regular,
+			content: []byte("legit"),
+		},
+		{
+			name:    "ZWJ in non-dotgit name",
+			path:    "ho\u200dme/note",
+			mode:    filemode.Regular,
+			content: []byte("legit"),
+			config:  map[string]string{"core.protectHFS": "true"},
+		},
+		{
+			name:    "relative symlink within worktree",
+			path:    "link",
+			mode:    filemode.Symlink,
+			content: []byte("subdir/file"),
+		},
+	}
+
+	runResetCases(t, tests)
+}
+
+// TestCheckoutRejectsDangerousTrees confirms that the same per-change
+// validation applies to Checkout, not just Reset \u2014 both go through
+// (*Worktree).validChange.
+func TestCheckoutRejectsDangerousTrees(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping path validation conformance test in short mode")
+	}
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	r, err := PlainInit(dir, false)
+	require.NoError(t, err)
+
+	w, err := r.Worktree()
+	require.NoError(t, err)
+
+	require.NoError(t, util.WriteFile(w.Filesystem, "README", []byte("init"), 0o644))
+	_, err = w.Add("README")
+	require.NoError(t, err)
+
+	initHash, err := w.Commit("initial commit\n", &CommitOptions{Author: defaultSignature()})
+	require.NoError(t, err)
+
+	initCommit, err := r.CommitObject(initHash)
+	require.NoError(t, err)
+
+	badCommit := buildBadCommit(t, r.Storer, initCommit, initHash,
+		".git/config", filemode.Regular, []byte("payload"))
+
+	err = w.Checkout(&CheckoutOptions{Hash: badCommit.Hash, Force: true})
+	assert.Error(t, err, "go-git should reject checkout onto a tree containing .git/config")
+}
+
+func runResetCases(t *testing.T, tests []pathTestCase) {
+	t.Helper()
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			if tc.onlyOnGOOS != "" && runtime.GOOS != tc.onlyOnGOOS {
-				t.Skipf("only runs on %s", tc.onlyOnGOOS)
-			}
 
 			dir := t.TempDir()
 
@@ -129,18 +289,21 @@ func TestPathValidationRejectsDangerousResets(t *testing.T) {
 			initCommit, err := r.CommitObject(initHash)
 			require.NoError(t, err)
 
-			badCommit := buildBadCommit(t, r.Storer, initCommit, initHash, tc.path)
+			badCommit := buildBadCommit(t, r.Storer, initCommit, initHash, tc.path, tc.mode, tc.content)
 
 			err = w.Reset(&ResetOptions{Commit: badCommit.Hash, Mode: HardReset})
-			assert.Error(t, err, "go-git should reject reset onto %q", tc.path)
+			if tc.wantErr {
+				assert.Error(t, err, "go-git should reject reset onto %q", tc.path)
+			} else {
+				assert.NoError(t, err, "reset should accept %q", tc.path)
+			}
 		})
 	}
 }
 
-func buildBadCommit(t *testing.T, s storer.Storer, parent *object.Commit, parentHash plumbing.Hash, filePath string) *object.Commit {
+func buildBadCommit(t *testing.T, s storer.Storer, parent *object.Commit, parentHash plumbing.Hash, filePath string, leafMode filemode.FileMode, content []byte) *object.Commit {
 	t.Helper()
 
-	content := []byte("exploit")
 	blobObj := s.NewEncodedObject()
 	blobObj.SetType(plumbing.BlobObject)
 	blobObj.SetSize(int64(len(content)))
@@ -154,7 +317,6 @@ func buildBadCommit(t *testing.T, s storer.Storer, parent *object.Commit, parent
 
 	parts := strings.Split(filePath, "/")
 	leafHash := blobHash
-	leafMode := filemode.Regular
 
 	for i := len(parts) - 1; i >= 1; i-- {
 		tree := &object.Tree{
@@ -189,7 +351,7 @@ func buildBadCommit(t *testing.T, s storer.Storer, parent *object.Commit, parent
 	commit := &object.Commit{
 		Author:       *defaultSignature(),
 		Committer:    *defaultSignature(),
-		Message:      "bad path: " + filePath + "\n",
+		Message:      "crafted: " + filePath + "\n",
 		TreeHash:     rootHash,
 		ParentHashes: []plumbing.Hash{parentHash},
 	}
