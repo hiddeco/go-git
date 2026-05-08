@@ -322,11 +322,11 @@ func (c *Config) unmarshalCore() {
 	c.Core.Worktree = s.Options.Get(worktreeKey)
 	c.Core.CommentChar = s.Options.Get(commentCharKey)
 
-	if v := s.Options.Get(protectNTFSKey); v != "" {
-		c.Core.ProtectNTFS = NewOptBool(v == "true")
+	if parsed := parseConfigBool(s.Options.Get(protectNTFSKey)); parsed.IsSet() {
+		c.Core.ProtectNTFS = parsed
 	}
-	if v := s.Options.Get(protectHFSKey); v != "" {
-		c.Core.ProtectHFS = NewOptBool(v == "true")
+	if parsed := parseConfigBool(s.Options.Get(protectHFSKey)); parsed.IsSet() {
+		c.Core.ProtectHFS = parsed
 	}
 }
 
