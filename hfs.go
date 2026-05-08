@@ -36,12 +36,13 @@ var hfsIgnoredCodepoints = map[rune]struct{}{
 	0xfeff: {}, // ZERO WIDTH NO-BREAK SPACE
 }
 
-// isHFSDotGit returns true if the given path component would be
-// treated as ".git" on an HFS+ filesystem after stripping ignored
-// Unicode code points and folding to lower case.
-func isHFSDotGit(part string) bool {
-	const needle = "git"
-
+// isHFSDot returns true if part would be treated as ".<needle>"
+// on an HFS+ filesystem after stripping HFS-ignored Unicode code
+// points and folding ASCII to lower case. needle must be lowercase
+// ASCII.
+//
+// See upstream Git utf8.c is_hfs_dotgit / is_hfs_dotgitmodules.
+func isHFSDot(part, needle string) bool {
 	runes := []rune(part)
 	i := 0
 
@@ -57,7 +58,7 @@ func isHFSDotGit(part string) bool {
 	}
 	i++
 
-	// match "git" case-insensitively, skipping ignored code points
+	// match needle case-insensitively, skipping ignored code points
 	for _, expected := range needle {
 		for i < len(runes) {
 			if _, ok := hfsIgnoredCodepoints[runes[i]]; !ok {
@@ -72,7 +73,7 @@ func isHFSDotGit(part string) bool {
 		if r > 127 {
 			return false
 		}
-		if unicode.ToLower(r) != unicode.ToLower(expected) {
+		if unicode.ToLower(r) != expected {
 			return false
 		}
 		i++
@@ -88,4 +89,16 @@ func isHFSDotGit(part string) bool {
 
 	// must be at end of component
 	return i == len(runes)
+}
+
+// isHFSDotGit returns true if part would be treated as ".git" on
+// an HFS+ filesystem.
+func isHFSDotGit(part string) bool {
+	return isHFSDot(part, "git")
+}
+
+// isHFSDotGitmodules returns true if part would be treated as
+// ".gitmodules" on an HFS+ filesystem.
+func isHFSDotGitmodules(part string) bool {
+	return isHFSDot(part, "gitmodules")
 }

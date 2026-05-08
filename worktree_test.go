@@ -3219,6 +3219,33 @@ func TestWindowsValidPath(t *testing.T) {
 	}
 }
 
+func TestIsHFSDotGitmodules(t *testing.T) {
+	tests := []struct {
+		name string
+		part string
+		want bool
+	}{
+		{"bare", ".gitmodules", true},
+		{"mixed case", ".GitModules", true},
+		{"ZWNJ inserted", ".git‌modules", true},
+		{"LRM after dot", ".‎gitmodules", true},
+		{"ZWJ before dot", "‍.gitmodules", true},
+		{"ZWNBSP at end", ".gitmodules\ufeff", true},
+		{"trailing space", ".gitmodules ", false},
+		{"trailing dot", ".gitmodules.", false},
+		{"with extra char", ".gitmodulesx", false},
+		{"truncated", ".gitmodule", false},
+		{"missing dot", "gitmodules", false},
+		{".git", ".git", false},
+		{"empty", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isHFSDotGitmodules(tc.part))
+		})
+	}
+}
+
 func TestIsNTFSDotGitmodules(t *testing.T) {
 	tests := []struct {
 		part string

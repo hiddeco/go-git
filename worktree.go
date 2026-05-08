@@ -559,12 +559,12 @@ func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 
 // validSymlinkName checks whether name (a symlink's tree path) is
 // safe to materialize on disk. It rejects symlink names whose
-// components would be normalised to ".gitmodules" by NTFS — these
-// would let a malicious tree overwrite the repository's submodule
-// configuration via filesystem path normalisation.
+// components would be normalised to ".gitmodules" by NTFS or HFS+
+// — these would let a malicious tree overwrite the repository's
+// submodule configuration via filesystem path normalisation.
 //
 // validSymlinkName is in addition to validPath, not a replacement.
-func validSymlinkName(protectNTFS, _ bool, name string) error {
+func validSymlinkName(protectNTFS, protectHFS bool, name string) error {
 	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '/' || r == '\\'
 	})
@@ -573,6 +573,9 @@ func validSymlinkName(protectNTFS, _ bool, name string) error {
 			return ErrGitModulesSymlink
 		}
 		if protectNTFS && isNTFSDotGitmodules(part) {
+			return ErrGitModulesSymlink
+		}
+		if protectHFS && isHFSDotGitmodules(part) {
 			return ErrGitModulesSymlink
 		}
 	}
