@@ -141,7 +141,7 @@ func readFanout(idx *MemoryIndex, r io.Reader) error {
 }
 
 func readObjectNames(idx *MemoryIndex, r io.Reader) error {
-	idSize := uint32(idx.idSize())
+	idSize := idx.idSize()
 
 	for k := range fanout {
 		var buckets uint32
@@ -157,15 +157,15 @@ func readObjectNames(idx *MemoryIndex, r io.Reader) error {
 
 		idx.FanoutMapping[k] = len(idx.Names)
 
-		nameLen := int(buckets * idSize)
+		nameLen := int(buckets) * idSize
 		bin := make([]byte, nameLen)
 		if _, err := io.ReadFull(r, bin); err != nil {
 			return err
 		}
 
 		idx.Names = append(idx.Names, bin)
-		idx.Offset32 = append(idx.Offset32, make([]byte, buckets*4))
-		idx.CRC32 = append(idx.CRC32, make([]byte, buckets*4))
+		idx.Offset32 = append(idx.Offset32, make([]byte, int(buckets)*4))
+		idx.CRC32 = append(idx.CRC32, make([]byte, int(buckets)*4))
 	}
 
 	return nil
