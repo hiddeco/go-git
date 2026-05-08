@@ -21,6 +21,22 @@ var (
 
 const (
 	fanout = 256
+
+	// maxNamesBytes caps the upfront names-buffer allocation
+	// (Fanout[255] * idSize) the decoder will accept from an idx v2 file
+	// before any further input validation. The decoder allocates
+	// per-object name, offset, and crc buffers from Fanout[255] eagerly,
+	// so without a cap a malformed Fanout[255] = 0xFFFFFFFF would request
+	// ~80 GiB of name buffer at SHA-1 alone.
+	//
+	// 512 MiB sits above realistic single-pack object counts — the Linux
+	// kernel monorepo packs ~1 Mi objects — while keeping the upfront
+	// memory commitment from a single untrusted input bounded. The budget
+	// admits ~26.8 Mi entries at SHA-1 and ~16.7 Mi entries at SHA-256.
+	// The cap is hash-agnostic by design: as SHA-256 adoption grows it
+	// admits roughly half as many entries, but the memory commitment
+	// (the thing the threat model cares about) stays fixed.
+	maxNamesBytes = 512 << 20
 )
 
 // Decoder reads and decodes idx files from an input stream.
@@ -109,6 +125,16 @@ func readFanout(idx *MemoryIndex, r io.Reader) error {
 		}
 		idx.Fanout[k] = n
 		idx.FanoutMapping[k] = noMapping
+	}
+
+	// Reject inputs that would commit more upfront memory to the names
+	// buffer than the configured budget. The multiplication is in uint64
+	// to avoid intermediate overflow at attacker-supplied counts (worst
+	// case at a hypothetical 64-byte hash: 0xFFFFFFFF * 64 = 256 GiB,
+	// well within uint64).
+	if want := uint64(idx.Fanout[fanout-1]) * uint64(idx.idSize()); want > maxNamesBytes {
+		return fmt.Errorf("%w: declared object count %d would require %d bytes upfront, exceeding the %d-byte limit",
+			ErrMalformedIdxFile, idx.Fanout[fanout-1], want, maxNamesBytes)
 	}
 
 	return nil

@@ -231,6 +231,24 @@ func TestDecodeErrors(t *testing.T) {
 			wantErrContains: "not monotonically non-decreasing",
 		},
 		{
+			name: "fanout total exceeds names budget",
+			input: func() []byte {
+				buf := idxV2Header()
+				// Smallest count whose `count*20` exceeds maxNamesBytes
+				// (512 MiB): ceil((512 << 20) / 20) = 26,843,546. The test
+				// uses `new(MemoryIndex)` which defaults to SHA-1 (idSize 20);
+				// the case still exceeds the cap by a wider margin under
+				// SHA-256, so it remains valid if the default hash changes.
+				// Hard-coded because maxNamesBytes is unexported and the test
+				// lives in `package idxfile_test`; update this value (and
+				// the comment) together if the constant changes.
+				buf = append(buf, writeFanout(26843546, nil)...)
+				return buf
+			},
+			wantErr:         ErrMalformedIdxFile,
+			wantErrContains: "exceeding the",
+		},
+		{
 			name: "truncated object names",
 			input: func() []byte {
 				buf := idxV2Header()
