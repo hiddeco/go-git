@@ -3219,6 +3219,41 @@ func TestWindowsValidPath(t *testing.T) {
 	}
 }
 
+func TestIsNTFSDotGitmodules(t *testing.T) {
+	tests := []struct {
+		part string
+		want bool
+	}{
+		{".gitmodules", true},
+		{".GitModules", true},
+		{".gitmodules ", true},
+		{".gitmodules.", true},
+		{".gitmodules . . .", true},
+		{".gitmodules:", true},
+		{".gitmodules::$DATA", true},
+		{".gitmodules.foo", false},
+		{".gitmodulesx", false},
+		{".gitmodule", false},
+		{"gitmod~1", true},
+		{"GITMOD~1", true},
+		{"gitmod~4", true},
+		{"gitmod~5", false},
+		{"gitmoo~1", false},
+		{"gi7eba~1", true},
+		{"gi7eba~9", true},
+		{"GI7EBA~1", true},
+		{"gi7ebb~1", false},
+		{".gitmodulesa", false},
+		{"", false},
+		{".git", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.part, func(t *testing.T) {
+			assert.Equal(t, tc.want, isNTFSDotGitmodules(tc.part))
+		})
+	}
+}
+
 var statusCodeNames = map[StatusCode]string{
 	Unmodified:         "Unmodified",
 	Untracked:          "Untracked",

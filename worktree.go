@@ -557,6 +557,28 @@ func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 	return nil
 }
 
+// validSymlinkName checks whether name (a symlink's tree path) is
+// safe to materialize on disk. It rejects symlink names whose
+// components would be normalised to ".gitmodules" by NTFS — these
+// would let a malicious tree overwrite the repository's submodule
+// configuration via filesystem path normalisation.
+//
+// validSymlinkName is in addition to validPath, not a replacement.
+func validSymlinkName(protectNTFS, _ bool, name string) error {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	for _, part := range parts {
+		if strings.EqualFold(part, gitmodulesFile) {
+			return ErrGitModulesSymlink
+		}
+		if protectNTFS && isNTFSDotGitmodules(part) {
+			return ErrGitModulesSymlink
+		}
+	}
+	return nil
+}
+
 // pathProtections returns the effective core.protectNTFS / core.protectHFS
 // values for this worktree's repository, falling back to platform defaults
 // when the config keys are not explicitly set.
@@ -772,8 +794,9 @@ func (w *Worktree) checkoutFile(f *object.File) (err error) {
 
 func (w *Worktree) checkoutFileSymlink(f *object.File) (err error) {
 	// https://github.com/git/git/commit/10ecfa76491e4923988337b2e2243b05376b40de
-	if strings.EqualFold(f.Name, gitmodulesFile) {
-		return ErrGitModulesSymlink
+	protectNTFS, protectHFS := w.pathProtections()
+	if err := validSymlinkName(protectNTFS, protectHFS, f.Name); err != nil {
+		return err
 	}
 
 	from, err := f.Reader()
@@ -789,7 +812,6 @@ func (w *Worktree) checkoutFileSymlink(f *object.File) (err error) {
 	}
 
 	target := string(bytes)
-	protectNTFS, protectHFS := w.pathProtections()
 	if err := validPath(protectNTFS, protectHFS, target, f.Name); err != nil {
 		return err
 	}
