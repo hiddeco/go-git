@@ -3219,6 +3219,32 @@ func TestWindowsValidPath(t *testing.T) {
 	}
 }
 
+func TestIsAbsoluteSymlinkTarget(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"empty", "", false},
+		{"unix root", "/etc/passwd", true},
+		{"unix root single", "/", true},
+		{"windows root", "\\Windows", true},
+		{"unc", "\\\\server\\share", true},
+		{"drive uppercase", "C:\\Windows", true},
+		{"drive lowercase", "c:foo", true},
+		{"drive bare", "Z:", true},
+		{"relative", "foo/bar", false},
+		{"relative dot", "./foo", false},
+		{"relative parent", "../foo", false},
+		{"colon mid", "foo:bar", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isAbsoluteSymlinkTarget(tc.target))
+		})
+	}
+}
+
 func TestIsHFSDotGitmodules(t *testing.T) {
 	tests := []struct {
 		name string

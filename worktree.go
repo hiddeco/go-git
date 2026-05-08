@@ -31,6 +31,7 @@ var (
 	ErrGitModulesSymlink               = errors.New(gitmodulesFile + " is a symlink")
 	ErrNonFastForwardUpdate            = errors.New("non-fast-forward update")
 	ErrRestoreWorktreeOnlyNotSupported = errors.New("worktree only is not supported")
+	ErrAbsoluteSymlinkTarget           = errors.New("symlink target is an absolute path")
 )
 
 // Worktree represents a git worktree.
@@ -557,6 +558,28 @@ func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 	return nil
 }
 
+// isAbsoluteSymlinkTarget reports whether target uses an OS-level
+// absolute path syntax (Unix root, Windows root or UNC, or drive
+// prefix). Symlinks in Git trees are repository-relative pointers
+// by convention; an absolute target either escapes the worktree
+// at write time (the CVE-2024-32002 family) or is non-portable
+// across machines, and has no legitimate use in tree-stored data.
+func isAbsoluteSymlinkTarget(target string) bool {
+	if target == "" {
+		return false
+	}
+	if target[0] == '/' || target[0] == '\\' {
+		return true
+	}
+	if len(target) >= 2 && target[1] == ':' {
+		c := target[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	return false
+}
+
 // validSymlinkName checks whether name (a symlink's tree path) is
 // safe to materialize on disk. It rejects symlink names whose
 // components would be normalised to ".gitmodules" by NTFS or HFS+
@@ -815,6 +838,9 @@ func (w *Worktree) checkoutFileSymlink(f *object.File) (err error) {
 	}
 
 	target := string(bytes)
+	if isAbsoluteSymlinkTarget(target) {
+		return ErrAbsoluteSymlinkTarget
+	}
 	if err := validPath(protectNTFS, protectHFS, target, f.Name); err != nil {
 		return err
 	}
