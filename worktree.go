@@ -512,8 +512,8 @@ var worktreeDeny = map[string]struct{}{
 // https://github.com/git/git/blob/564d0252ca632e0264ed670534a51d18a689ef5d/path.c#L1383
 func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 	for _, p := range paths {
-		for _, r := range p {
-			if r < 0x20 || r == 0x7f {
+		for i := 0; i < len(p); i++ {
+			if p[i] < 0x20 || p[i] == 0x7f {
 				return fmt.Errorf("invalid path %q: contains control character", p)
 			}
 		}
