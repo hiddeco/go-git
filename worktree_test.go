@@ -3160,8 +3160,8 @@ func TestValidPath(t *testing.T) {
 		{".gitignore", false},
 		{"a..b", false},
 		{".", true},
-		{"a/.git", false},
-		{"a\\.git", false},
+		{"a/.git", true},
+		{"a\\.git", true},
 		{"a/.git/b", true},
 		{"a\\.git\\b", true},
 	}

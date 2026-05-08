@@ -529,16 +529,15 @@ func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 			}
 		}
 
-		for i, part := range parts {
+		for _, part := range parts {
 			if part == "." || part == ".." {
 				return fmt.Errorf("invalid path %q: cannot use %q", p, part)
 			}
 
-			// Reject .git (and equivalents) as a path component when it is
-			// either the first component (root-level .git) or a non-final
-			// component (traversal into a .git directory, e.g. "a/.git/config").
-			// A final non-first .git component (e.g. "submodule/.git") is
-			// allowed because submodule worktrees contain a .git pointer file.
+			// Reject .git (and NTFS / HFS+ equivalents) at every component
+			// to match upstream verify_path. Submodule worktrees contain a
+			// .git pointer file but it's created by gitlink checkout, never
+			// stored as a tree entry.
 			isDotGit := false
 			if _, denied := worktreeDeny[strings.ToLower(part)]; denied {
 				isDotGit = true
@@ -546,7 +545,7 @@ func validPath(protectNTFS, protectHFS bool, paths ...string) error {
 				isDotGit = true
 			}
 
-			if isDotGit && (i == 0 || i < len(parts)-1) {
+			if isDotGit {
 				return fmt.Errorf("invalid path component: %q", p)
 			}
 
