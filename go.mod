@@ -31,3 +31,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/go-git/go-billy/v6 => github.com/hiddeco/go-billy/v6 v6.0.0-20260515154057-77effdc1babc
