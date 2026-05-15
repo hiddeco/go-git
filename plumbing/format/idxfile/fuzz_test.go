@@ -6,6 +6,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	billy "github.com/go-git/go-billy/v6"
+
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/hash"
 )
@@ -36,17 +38,17 @@ func FuzzLazyIndex(f *testing.F) {
 			}
 		}
 
-		openIdx := func() (ReadAtCloser, error) {
+		openIdx := func() (billy.ReaderAtCloser, error) {
 			return nopCloserReaderAt{bytes.NewReader(idxData)}, nil
 		}
-		var openRev func() (ReadAtCloser, error)
+		var openRev func() (billy.ReaderAtCloser, error)
 		if len(revData) > 0 {
-			openRev = func() (ReadAtCloser, error) {
+			openRev = func() (billy.ReaderAtCloser, error) {
 				return nopCloserReaderAt{bytes.NewReader(revData)}, nil
 			}
 		}
 
-		idx, err := NewLazyIndex(openIdx, openRev, packHash)
+		idx, err := newLazyIndexFromOpeners(openIdx, openRev, packHash)
 		if err != nil {
 			// Expected for most fuzz inputs.
 			return

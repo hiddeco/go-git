@@ -722,14 +722,17 @@ func TestOpenPackRevUsableByLazyIndex(t *testing.T) {
 		WriteReverseIndex: false,
 	})
 
-	openIdx := func() (idxfile.ReadAtCloser, error) {
+	idxOpener := func() (billy.ReaderAtCloser, error) {
 		return dot.ObjectPackIdx(h)
 	}
-	openRev := func() (idxfile.ReadAtCloser, error) {
+	revOpener := func() (billy.ReaderAtCloser, error) {
 		return dot.OpenPackRev(h)
 	}
+	idxSF := idxfile.NewSharedFile(idxOpener)
+	revSF := idxfile.NewSharedFile(revOpener)
+	t.Cleanup(func() { _ = idxSF.Close(); _ = revSF.Close() })
 
-	idx, err := idxfile.NewLazyIndex(openIdx, openRev, h)
+	idx, err := idxfile.NewLazyIndex(idxSF, revSF, h)
 	require.NoError(t, err)
 	defer idx.Close()
 

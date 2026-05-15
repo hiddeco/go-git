@@ -21,27 +21,25 @@ const (
 	is64bitsMask = uint64(1) << 31
 )
 
-// ReadAtCloser is the interface required for files used by LazyIndex.
-// It combines random-access reads with sequential read/seek/close.
+// ReadAtCloser is the interface returned by [DotGit.OpenPackRev]. It
+// combines random-access reads with sequential read/seek/close.
 // [billy.File] satisfies this interface.
+//
+// Retained as a public type for callers of OpenPackRev; LazyIndex
+// itself consumes [*SharedFile] now.
 type ReadAtCloser interface {
 	io.ReaderAt
 	io.ReadCloser
 }
 
-// openFileFunc opens a file for reading. Each call must return a fresh,
-// independently closeable handle. The caller is responsible for closing
-// the returned ReadAtCloser.
-type openFileFunc func() (ReadAtCloser, error)
-
 // LazyIndex implements the Index interface by reading directly from
 // .idx and .rev files via ReadAt, without loading all data into memory.
 //
-// File descriptors are managed automatically via reference-counted
-// shared handles: opened lazily on first use, shared across concurrent
-// readers, and closed when no readers remain. This avoids holding
-// descriptors open indefinitely while still sharing a single FD across
-// concurrent operations.
+// File descriptors are managed externally via [*SharedFile] handles
+// supplied at construction time: opened lazily on first use, shared
+// across concurrent readers, and closed when no readers remain. This
+// avoids holding descriptors open indefinitely while still sharing a
+// single FD across concurrent operations.
 type LazyIndex struct {
 	hashSize int
 	count    int
@@ -54,36 +52,29 @@ type LazyIndex struct {
 	off32Start  int
 	off64Start  int
 
-	idx *sharedFile
-	rev *sharedFile
+	idx *SharedFile
+	rev *SharedFile
 
 	fanout [256]uint32 // cached from idx; small enough to keep in memory
 }
 
 var _ Index = (*LazyIndex)(nil)
 
-// NewLazyIndex creates a LazyIndex from opener functions for .idx and
-// .rev files.
-//
-// The openers are called to obtain file handles on demand. Each call
-// must return a fresh, independently closeable handle. File descriptors
-// are shared across concurrent readers and released automatically when
-// idle.
-func NewLazyIndex(openIdx, openRev func() (ReadAtCloser, error), packHash plumbing.Hash) (*LazyIndex, error) {
-	if openIdx == nil {
-		return nil, errors.New("idx opener is nil")
+// NewLazyIndex creates a LazyIndex that consumes the given SharedFiles
+// for the .idx and .rev files. The LazyIndex does NOT own the
+// SharedFiles; LazyIndex.Close releases any iterator state but does
+// NOT call SharedFile.Close. The owner of the SharedFiles (typically a
+// packhandle.PackHandle) is responsible for terminal Close.
+func NewLazyIndex(idx, rev *SharedFile, packHash plumbing.Hash) (*LazyIndex, error) {
+	if idx == nil {
+		return nil, errors.New("idx shared file is nil")
 	}
-	if openRev == nil {
-		return nil, errors.New("rev opener is nil")
+	if rev == nil {
+		return nil, errors.New("rev shared file is nil")
 	}
 
-	s := &LazyIndex{
-		idx: newSharedFile(openIdx),
-		rev: newSharedFile(openRev),
-	}
-
+	s := &LazyIndex{idx: idx, rev: rev}
 	if err := s.init(packHash); err != nil {
-		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
@@ -94,17 +85,17 @@ func NewLazyIndex(openIdx, openRev func() (ReadAtCloser, error), packHash plumbi
 // sharedFile so the grace period keeps them warm for the first real
 // operation.
 func (s *LazyIndex) init(packHash plumbing.Hash) error {
-	idxRA, err := s.idx.acquire()
+	idxRA, err := s.idx.Acquire()
 	if err != nil {
 		return fmt.Errorf("cannot open idx: %w", err)
 	}
-	defer s.idx.release()
+	defer s.idx.Release()
 
-	revRA, err := s.rev.acquire()
+	revRA, err := s.rev.Acquire()
 	if err != nil {
 		return fmt.Errorf("cannot open rev: %w", err)
 	}
-	defer s.rev.release()
+	defer s.rev.Release()
 
 	var hdr [idxHeaderSize]byte
 	if _, err := idxRA.ReadAt(hdr[:], 0); err != nil {
@@ -181,11 +172,11 @@ func (s *LazyIndex) init(packHash plumbing.Hash) error {
 // Contains reports whether the given hash exists in the index by
 // binary-searching the idx names table.
 func (s *LazyIndex) Contains(h plumbing.Hash) (bool, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return false, err
 	}
-	defer s.idx.release()
+	defer s.idx.Release()
 
 	_, found, err := s.findHashPos(idx, h)
 	return found, err
@@ -194,11 +185,11 @@ func (s *LazyIndex) Contains(h plumbing.Hash) (bool, error) {
 // FindOffset returns the packfile offset for the object with the given hash.
 // It returns plumbing.ErrObjectNotFound if the hash is not in the index.
 func (s *LazyIndex) FindOffset(h plumbing.Hash) (int64, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return 0, err
 	}
-	defer s.idx.release()
+	defer s.idx.Release()
 
 	pos, found, err := s.findHashPos(idx, h)
 	if err != nil {
@@ -219,11 +210,11 @@ func (s *LazyIndex) FindOffset(h plumbing.Hash) (int64, error) {
 // FindCRC32 returns the CRC32 checksum of the object with the given hash.
 // It returns plumbing.ErrObjectNotFound if the hash is not in the index.
 func (s *LazyIndex) FindCRC32(h plumbing.Hash) (uint32, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return 0, err
 	}
-	defer s.idx.release()
+	defer s.idx.Release()
 
 	pos, found, err := s.findHashPos(idx, h)
 	if err != nil {
@@ -240,17 +231,17 @@ func (s *LazyIndex) FindCRC32(h plumbing.Hash) (uint32, error) {
 // by binary-searching the .rev reverse index.
 // It returns plumbing.ErrObjectNotFound if no object exists at that offset.
 func (s *LazyIndex) FindHash(o int64) (plumbing.Hash, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	defer s.idx.release()
+	defer s.idx.Release()
 
-	rev, err := s.rev.acquire()
+	rev, err := s.rev.Acquire()
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	defer s.rev.release()
+	defer s.rev.Release()
 
 	return s.findHashViaRev(idx, rev, o)
 }
@@ -264,7 +255,7 @@ func (s *LazyIndex) Count() (int64, error) {
 // The caller must call Close on the returned iterator to release the
 // underlying file reference.
 func (s *LazyIndex) Entries() (EntryIter, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return nil, err
 	}
@@ -278,23 +269,24 @@ func (s *LazyIndex) Entries() (EntryIter, error) {
 // The caller must call Close on the returned iterator to release the
 // underlying file references.
 func (s *LazyIndex) EntriesByOffset() (EntryIter, error) {
-	idx, err := s.idx.acquire()
+	idx, err := s.idx.Acquire()
 	if err != nil {
 		return nil, err
 	}
-	rev, err := s.rev.acquire()
+	rev, err := s.rev.Acquire()
 	if err != nil {
-		s.idx.release()
+		s.idx.Release()
 		return nil, err
 	}
 	return &revEntryIter{s: s, idx: idx, rev: rev}, nil
 }
 
-// Close releases the underlying shared file handles, preventing future
-// operations. If there are active readers they will finish normally;
-// the file descriptors close when the last reader is done.
+// Close releases LazyIndex's own state. It does NOT close the
+// underlying SharedFiles (which the PackHandle owns). Active iterators
+// continue to function; their Close releases their Acquired SharedFile
+// refcounts.
 func (s *LazyIndex) Close() error {
-	return errors.Join(s.idx.Close(), s.rev.Close())
+	return nil
 }
 
 // --- internal helpers; all take an io.ReaderAt so the caller controls
@@ -485,7 +477,7 @@ type scannerEntryIter struct {
 
 func (it *scannerEntryIter) Next() (*Entry, error) {
 	if it.idx == nil {
-		return nil, errSharedFileClosed
+		return nil, ErrSharedFileClosed
 	}
 	if it.pos >= it.s.count {
 		return nil, io.EOF
@@ -502,7 +494,7 @@ func (it *scannerEntryIter) Next() (*Entry, error) {
 func (it *scannerEntryIter) Close() error {
 	it.pos = it.s.count
 	if it.idx != nil {
-		it.s.idx.release()
+		it.s.idx.Release()
 		it.idx = nil
 	}
 	return nil
@@ -520,7 +512,7 @@ type revEntryIter struct {
 
 func (it *revEntryIter) Next() (*Entry, error) {
 	if it.idx == nil || it.rev == nil {
-		return nil, errSharedFileClosed
+		return nil, ErrSharedFileClosed
 	}
 	if it.pos >= it.s.count {
 		return nil, io.EOF
@@ -550,11 +542,11 @@ func (it *revEntryIter) Next() (*Entry, error) {
 func (it *revEntryIter) Close() error {
 	it.pos = it.s.count
 	if it.idx != nil {
-		it.s.idx.release()
+		it.s.idx.Release()
 		it.idx = nil
 	}
 	if it.rev != nil {
-		it.s.rev.release()
+		it.s.rev.Release()
 		it.rev = nil
 	}
 	return nil

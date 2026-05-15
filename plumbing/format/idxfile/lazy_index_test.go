@@ -9,6 +9,7 @@ import (
 	"sort"
 	"testing"
 
+	billy "github.com/go-git/go-billy/v6"
 	fixtures "github.com/go-git/go-git-fixtures/v6"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -16,6 +17,35 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/hash"
 )
+
+// newLazyIndexFromOpeners builds SharedFiles around the given opener
+// funcs and wires them into a LazyIndex. Helper used by the tests that
+// previously called NewLazyIndex with opener funcs directly. If
+// openRev is nil, a nil SharedFile is passed through to exercise the
+// nil-check.
+func newLazyIndexFromOpeners(
+	openIdx, openRev func() (billy.ReaderAtCloser, error),
+	packHash plumbing.Hash,
+) (*LazyIndex, error) {
+	var idxSF, revSF *SharedFile
+	if openIdx != nil {
+		idxSF = NewSharedFile(openIdx)
+	}
+	if openRev != nil {
+		revSF = NewSharedFile(openRev)
+	}
+	li, err := NewLazyIndex(idxSF, revSF, packHash)
+	if err != nil {
+		if idxSF != nil {
+			_ = idxSF.Close()
+		}
+		if revSF != nil {
+			_ = revSF.Close()
+		}
+		return nil, err
+	}
+	return li, nil
+}
 
 type LazyIndexSuite struct {
 	suite.Suite
@@ -68,26 +98,26 @@ func (s *LazyIndexSuite) TestFindHashWithRev() {
 
 func (s *LazyIndexSuite) TestNoRev() {
 	fixture := fixtures.Basic().One()
-	openIdx := func() (ReadAtCloser, error) { return fixture.Idx() }
-	idx, err := NewLazyIndex(openIdx, nil, plumbing.NewHash(fixture.PackfileHash))
+	openIdx := func() (billy.ReaderAtCloser, error) { return fixture.Idx() }
+	idx, err := newLazyIndexFromOpeners(openIdx, nil, plumbing.NewHash(fixture.PackfileHash))
 	s.Require().Error(err)
 	s.Require().Nil(idx)
 }
 
 func (s *LazyIndexSuite) TestNoIdx() {
 	fixture := fixtures.Basic().One()
-	openRev := func() (ReadAtCloser, error) { return fixture.Rev() }
-	idx, err := NewLazyIndex(nil, openRev, plumbing.NewHash(fixture.PackfileHash))
+	openRev := func() (billy.ReaderAtCloser, error) { return fixture.Rev() }
+	idx, err := newLazyIndexFromOpeners(nil, openRev, plumbing.NewHash(fixture.PackfileHash))
 	s.Require().Error(err)
 	s.Require().Nil(idx)
 }
 
 func (s *LazyIndexSuite) TestPackfileHashMismatch() {
 	fixture := fixtures.Basic().One()
-	openIdx := func() (ReadAtCloser, error) { return fixture.Idx() }
-	openRev := func() (ReadAtCloser, error) { return fixture.Rev() }
+	openIdx := func() (billy.ReaderAtCloser, error) { return fixture.Idx() }
+	openRev := func() (billy.ReaderAtCloser, error) { return fixture.Rev() }
 	wrongHash := plumbing.NewHash("0000000000000000000000000000000000000000")
-	idx, err := NewLazyIndex(openIdx, openRev, wrongHash)
+	idx, err := newLazyIndexFromOpeners(openIdx, openRev, wrongHash)
 	s.Require().Error(err)
 	s.Require().Nil(idx)
 	s.ErrorIs(err, ErrMalformedIdxFile)
@@ -314,7 +344,7 @@ func TestLazyIndexInitErrors(t *testing.T) {
 			t.Parallel()
 
 			openIdx := readerAtOpener(tt.idx())
-			var or func() (ReadAtCloser, error)
+			var or func() (billy.ReaderAtCloser, error)
 			if tt.rev != nil {
 				or = readerAtOpener(tt.rev())
 			} else {
@@ -326,7 +356,7 @@ func TestLazyIndexInitErrors(t *testing.T) {
 				ph = plumbing.NewHash("0000000000000000000000000000000000000000")
 			}
 
-			idx, err := NewLazyIndex(openIdx, or, ph)
+			idx, err := newLazyIndexFromOpeners(openIdx, or, ph)
 			require.Error(t, err, "test %q should fail", tt.name)
 			require.Nil(t, idx)
 			if tt.errIs != nil {
@@ -379,7 +409,7 @@ func TestLazyIndexOffset64OutOfRange(t *testing.T) {
 	openIdx := readerAtOpener(idxBytes)
 	openRev := readerAtOpener(revBuf.Bytes())
 
-	idx, err := NewLazyIndex(openIdx, openRev, packHash)
+	idx, err := newLazyIndexFromOpeners(openIdx, openRev, packHash)
 	require.NoError(t, err)
 	defer idx.Close()
 
@@ -394,8 +424,8 @@ func extractPackHash(idx []byte, hashSize int) plumbing.Hash {
 	return h
 }
 
-func readerAtOpener(data []byte) func() (ReadAtCloser, error) {
-	return func() (ReadAtCloser, error) {
+func readerAtOpener(data []byte) func() (billy.ReaderAtCloser, error) {
+	return func() (billy.ReaderAtCloser, error) {
 		return nopCloserReaderAt{bytes.NewReader(data)}, nil
 	}
 }
@@ -448,7 +478,7 @@ func fixtureLazyIndex(withRev bool) (*LazyIndex, error) {
 		return nil, err
 	}
 
-	openIdx := func() (ReadAtCloser, error) {
+	openIdx := func() (billy.ReaderAtCloser, error) {
 		return nopCloserReaderAt{bytes.NewReader(idxBytes)}, nil
 	}
 
@@ -457,14 +487,14 @@ func fixtureLazyIndex(withRev bool) (*LazyIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		openRev := func() (ReadAtCloser, error) {
+		openRev := func() (billy.ReaderAtCloser, error) {
 			return nopCloserReaderAt{bytes.NewReader(revBytes)}, nil
 		}
 
-		return NewLazyIndex(openIdx, openRev, memIdx.PackfileChecksum)
+		return newLazyIndexFromOpeners(openIdx, openRev, memIdx.PackfileChecksum)
 	}
 
-	return NewLazyIndex(openIdx, nil, memIdx.PackfileChecksum)
+	return newLazyIndexFromOpeners(openIdx, nil, memIdx.PackfileChecksum)
 }
 
 func buildTestRevFile(idx *MemoryIndex) ([]byte, error) {

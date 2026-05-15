@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	billy "github.com/go-git/go-billy/v6"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -232,14 +233,21 @@ func (s *ObjectStorage) loadIdxFile(h plumbing.Hash) error {
 }
 
 func (s *ObjectStorage) loadLazyIndex(h plumbing.Hash) (*idxfile.LazyIndex, error) {
-	openIdx := func() (idxfile.ReadAtCloser, error) {
+	idxOpener := func() (billy.ReaderAtCloser, error) {
 		return s.dir.ObjectPackIdx(h)
 	}
-	openRev := func() (idxfile.ReadAtCloser, error) {
+	revOpener := func() (billy.ReaderAtCloser, error) {
 		return s.dir.OpenPackRev(h)
 	}
-
-	return idxfile.NewLazyIndex(openIdx, openRev, h)
+	idxSF := idxfile.NewSharedFile(idxOpener)
+	revSF := idxfile.NewSharedFile(revOpener)
+	li, err := idxfile.NewLazyIndex(idxSF, revSF, h)
+	if err != nil {
+		_ = idxSF.Close()
+		_ = revSF.Close()
+		return nil, err
+	}
+	return li, nil
 }
 
 func (s *ObjectStorage) loadMemoryIndex(h plumbing.Hash) (err error) {
