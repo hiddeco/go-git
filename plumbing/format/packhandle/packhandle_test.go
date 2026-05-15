@@ -2,6 +2,7 @@ package packhandle
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
 	"sync/atomic"
@@ -273,6 +274,77 @@ func TestPackHandle_OpenError(t *testing.T) {
 	_, err := ph.OpenPackReader()
 	assert.Error(t, err)
 	assert.False(t, errors.Is(err, idxfile.ErrSharedFileClosed))
+}
+
+// makePackBytes constructs a minimally-valid pack file: 12-byte
+// header (signature + version + count) + filler + trailer.
+func makePackBytes(t *testing.T, version, count uint32, trailer []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	buf.Write([]byte{'P', 'A', 'C', 'K'})
+	binary.Write(&buf, binary.BigEndian, version)
+	binary.Write(&buf, binary.BigEndian, count)
+	buf.Write([]byte{0, 0, 0, 0})
+	buf.Write(trailer)
+	return buf.Bytes()
+}
+
+func TestPackHandle_MetaCached(t *testing.T) {
+	t.Parallel()
+	trailer := bytes.Repeat([]byte{0xab}, 20)
+	pack := makePackBytes(t, 2, 42, trailer)
+	ph, _ := newMemPackHandle(t, pack, []byte("idx"), []byte("rev"))
+	defer ph.Close()
+
+	m1, err := ph.Meta(20)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), m1.Version)
+	assert.Equal(t, uint32(42), m1.Count)
+	assert.Equal(t, trailer, m1.ID.Bytes())
+
+	m2, err := ph.Meta(20)
+	require.NoError(t, err)
+	assert.Equal(t, m1, m2)
+}
+
+func TestPackHandle_MetaCachedOpensOnce(t *testing.T) {
+	t.Parallel()
+	fs := memfs.New()
+	trailer := bytes.Repeat([]byte{0xcd}, 20)
+	writeMemFile(t, fs, "p.pack", makePackBytes(t, 2, 7, trailer))
+	writeMemFile(t, fs, "p.idx", []byte("idx"))
+	writeMemFile(t, fs, "p.rev", []byte("rev"))
+
+	packSrc, opens, _ := instrumentedSource(fs, "p.pack")
+	ph := New(Sources{
+		Pack: packSrc,
+		Idx:  PathSource(fs, "p.idx"),
+		Rev:  PathSource(fs, "p.rev"),
+	})
+	defer ph.Close()
+
+	_, err := ph.Meta(20)
+	require.NoError(t, err)
+	first := opens.Load()
+
+	// Second Meta call: no further opens.
+	_, err = ph.Meta(20)
+	require.NoError(t, err)
+	assert.Equal(t, first, opens.Load(),
+		"Meta should be cached after first call")
+}
+
+func TestPackHandle_MetaFailureCached(t *testing.T) {
+	t.Parallel()
+	// Pack too short to contain header + trailer.
+	ph, _ := newMemPackHandle(t, []byte("PA"), []byte("idx"), []byte("rev"))
+	defer ph.Close()
+
+	_, err1 := ph.Meta(20)
+	require.Error(t, err1)
+	_, err2 := ph.Meta(20)
+	require.Error(t, err2)
+	assert.Equal(t, err1.Error(), err2.Error())
 }
 
 func TestPackHandle_NewPanicsOnNilSource(t *testing.T) {

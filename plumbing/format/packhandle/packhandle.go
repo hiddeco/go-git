@@ -1,7 +1,10 @@
 package packhandle
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -150,11 +153,61 @@ func New(sources Sources) *PackHandle {
 	return h
 }
 
-// setupMeta is a stub until Task 6.
 func setupMeta(h *PackHandle) func(idSize int) (PackMeta, error) {
+	var (
+		once   sync.Once
+		result PackMeta
+		err    error
+	)
 	return func(idSize int) (PackMeta, error) {
-		return PackMeta{}, nil
+		once.Do(func() {
+			result, err = computeMeta(h, idSize)
+		})
+		return result, err
 	}
+}
+
+// computeMeta reads the pack header (12 bytes at offset 0) and the
+// footer hash (idSize bytes at offset size-idSize). Bypasses the
+// Open*Reader path and uses h.pack.Acquire directly — no
+// cursorReader, no type assertions.
+func computeMeta(h *PackHandle, idSize int) (PackMeta, error) {
+	size, err := h.packSize()
+	if err != nil {
+		return PackMeta{}, fmt.Errorf("packhandle: stat pack: %w", err)
+	}
+	if size < int64(12+idSize) {
+		return PackMeta{}, fmt.Errorf("packhandle: pack file too short: %d bytes", size)
+	}
+
+	ra, err := h.pack.Acquire()
+	if err != nil {
+		return PackMeta{}, err
+	}
+	defer h.pack.Release()
+
+	var header [12]byte
+	if _, err := ra.ReadAt(header[:], 0); err != nil {
+		return PackMeta{}, fmt.Errorf("packhandle: read pack header: %w", err)
+	}
+	if !bytes.Equal(header[0:4], []byte{'P', 'A', 'C', 'K'}) {
+		return PackMeta{}, fmt.Errorf("packhandle: bad pack signature %q", header[0:4])
+	}
+
+	footer := make([]byte, idSize)
+	if _, err := ra.ReadAt(footer, size-int64(idSize)); err != nil {
+		return PackMeta{}, fmt.Errorf("packhandle: read pack footer: %w", err)
+	}
+
+	meta := PackMeta{
+		Version: binary.BigEndian.Uint32(header[4:8]),
+		Count:   binary.BigEndian.Uint32(header[8:12]),
+	}
+	meta.ID.ResetBySize(idSize)
+	if _, err := meta.ID.Write(footer); err != nil {
+		return PackMeta{}, fmt.Errorf("packhandle: hash footer: %w", err)
+	}
+	return meta, nil
 }
 
 func (h *PackHandle) openCursor(sf *idxfile.SharedFile, sizeFn func() (int64, error)) (*cursorReader, error) {
