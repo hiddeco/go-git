@@ -1,14 +1,23 @@
 package packhandle
 
 import (
+	"errors"
 	"io"
 	"sync"
 
 	billy "github.com/go-git/go-billy/v6"
+	"github.com/go-git/go-billy/v6/util"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/format/idxfile"
 )
+
+// ErrSourceUnconfigured indicates that a Source has been
+// deliberately left without an Open/Size implementation. Returned
+// by ad-hoc PackHandle constructors when a code path reaches a
+// Source whose contract the caller did not intend to honour
+// (typically idx/rev on a PackHandle built only for .pack access).
+var ErrSourceUnconfigured = errors.New("packhandle: source is unconfigured")
 
 // PackReader is the union of methods Packfile needs against the
 // .pack file. Read and Seek share a single cursor protected by an
@@ -38,6 +47,8 @@ type RandomReader interface {
 // each Source's Open is invoked lazily on first need and again after
 // each grace-period close. Size is invoked lazily on demand (e.g.
 // from cursorReader.Seek(SeekEnd)).
+//
+// Both Open and Size are required: New panics if either is nil.
 type Source struct {
 	// Open returns a fresh concurrent-safe random-access read handle.
 	// The returned handle's Close is the disposal point for any
@@ -63,8 +74,18 @@ type Sources struct {
 // Size. No caching — Source's SharedFile manages refcounted reuse,
 // and Size invocations are rare enough that per-call Stat is fine.
 func PathSource(fs billy.Basic, path string) Source {
-	// stub — implemented in Task 5
-	return Source{}
+	return Source{
+		Open: func() (billy.ReaderAtCloser, error) {
+			return util.OpenReaderAt(fs, path)
+		},
+		Size: func() (int64, error) {
+			info, err := fs.Stat(path)
+			if err != nil {
+				return 0, err
+			}
+			return info.Size(), nil
+		},
+	}
 }
 
 // PackMeta is the pack-level metadata PackHandle caches on first
@@ -81,7 +102,7 @@ type PackMeta struct {
 type PackHandle struct {
 	pack, idx, rev *idxfile.SharedFile
 
-	packSize, idxSize, revSize func() (int64, error) // each cached via sync.OnceValues
+	packSize, idxSize, revSize func() (int64, error)
 
 	closeOnce sync.Once
 
@@ -90,30 +111,76 @@ type PackHandle struct {
 
 // New constructs a PackHandle from three Sources. No I/O occurs at
 // construction.
+//
+// New panics if any of the six Source function fields (Pack.Open,
+// Pack.Size, Idx.Open, Idx.Size, Rev.Open, Rev.Size) is nil. Use
+// PathSource for the standard case, or construct a Source directly
+// with both fields wired.
 func New(sources Sources) *PackHandle {
-	// stub — implemented in Task 5
-	return nil
+	if sources.Pack.Open == nil {
+		panic("packhandle: New: Pack.Open is nil")
+	}
+	if sources.Pack.Size == nil {
+		panic("packhandle: New: Pack.Size is nil")
+	}
+	if sources.Idx.Open == nil {
+		panic("packhandle: New: Idx.Open is nil")
+	}
+	if sources.Idx.Size == nil {
+		panic("packhandle: New: Idx.Size is nil")
+	}
+	if sources.Rev.Open == nil {
+		panic("packhandle: New: Rev.Open is nil")
+	}
+	if sources.Rev.Size == nil {
+		panic("packhandle: New: Rev.Size is nil")
+	}
+	h := &PackHandle{
+		pack: idxfile.NewSharedFile(sources.Pack.Open),
+		idx:  idxfile.NewSharedFile(sources.Idx.Open),
+		rev:  idxfile.NewSharedFile(sources.Rev.Open),
+	}
+	// Size getters are NOT cached: Stat is cheap, Seek(SeekEnd) is
+	// rare, and caching errors forever poisons the PackHandle on
+	// transient I/O failures.
+	h.packSize = sources.Pack.Size
+	h.idxSize = sources.Idx.Size
+	h.revSize = sources.Rev.Size
+	h.meta = setupMeta(h)
+	return h
+}
+
+// setupMeta is a stub until Task 6.
+func setupMeta(h *PackHandle) func(idSize int) (PackMeta, error) {
+	return func(idSize int) (PackMeta, error) {
+		return PackMeta{}, nil
+	}
+}
+
+func (h *PackHandle) openCursor(sf *idxfile.SharedFile, sizeFn func() (int64, error)) (*cursorReader, error) {
+	ra, err := sf.Acquire()
+	if err != nil {
+		return nil, err
+	}
+	return newCursorReader(ra, sf.Release, sizeFn), nil
 }
 
 // OpenPackReader returns a refcount-holding reader over the .pack
 // file. See PackReader for concurrency contract.
 func (h *PackHandle) OpenPackReader() (PackReader, error) {
-	// stub — implemented in Task 5
-	return nil, nil
+	return h.openCursor(h.pack, h.packSize)
 }
 
 // OpenIdxReader returns a refcount-holding reader over the .idx
 // file.
 func (h *PackHandle) OpenIdxReader() (RandomReader, error) {
-	// stub — implemented in Task 5
-	return nil, nil
+	return h.openCursor(h.idx, h.idxSize)
 }
 
 // OpenRevReader returns a refcount-holding reader over the .rev
 // file.
 func (h *PackHandle) OpenRevReader() (RandomReader, error) {
-	// stub — implemented in Task 5
-	return nil, nil
+	return h.openCursor(h.rev, h.revSize)
 }
 
 // Idx returns the underlying SharedFile for the .idx file, for use
@@ -147,6 +214,13 @@ func (h *PackHandle) Meta(idSize int) (PackMeta, error) {
 // once refcounts reach zero (terminal Close bypasses the grace
 // timer). Idempotent: subsequent Close calls return nil.
 func (h *PackHandle) Close() error {
-	// stub — implemented in Task 5
-	return nil
+	var err error
+	h.closeOnce.Do(func() {
+		err = errors.Join(
+			h.pack.Close(),
+			h.idx.Close(),
+			h.rev.Close(),
+		)
+	})
+	return err
 }
