@@ -4,9 +4,11 @@ package sideband
 type Type int8
 
 const (
-	// Sideband legacy sideband type up to 1000-byte messages
+	// Sideband legacy sideband type up to 995-byte data chunks
+	// (1000-byte pkt-line frames).
 	Sideband Type = iota
-	// Sideband64k sideband type up to 65519-byte messages
+	// Sideband64k sideband type up to 65515-byte data chunks
+	// (65520-byte pkt-line frames).
 	Sideband64k Type = iota
 
 	// MaxPackedSize for Sideband type

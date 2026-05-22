@@ -19,7 +19,9 @@ const chLen = 1
 //
 // If t is equal to `Sideband` the max pack size is set to MaxPackedSize, in any
 // other value is given, max pack is set to MaxPackedSize64k, that is the
-// maximum length of a line in pktline format.
+// maximum length of a line in pktline format. The chunk size reserves one byte
+// for the channel marker and four bytes for the pktline length prefix, matching
+// canonical Git's `n = packet_max - 5` in send_sideband.
 func NewMuxer(t Type, w io.Writer) *Muxer {
 	maxSize := MaxPackedSize64k
 	if t == Sideband {
@@ -27,7 +29,7 @@ func NewMuxer(t Type, w io.Writer) *Muxer {
 	}
 
 	return &Muxer{
-		max: maxSize - chLen,
+		max: maxSize - pktline.LenSize - chLen,
 		w:   w,
 	}
 }
