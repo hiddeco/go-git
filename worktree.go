@@ -598,14 +598,7 @@ func (w *Worktree) checkKeepResetConflicts(fromTree, toTree *object.Tree, sparse
 			if len(files) > 0 && !inFiles(filesMap, e.Name) {
 				continue
 			}
-			included := false
-			for _, dir := range sparseDirs {
-				if strings.HasPrefix(e.Name, dir+"/") || e.Name == dir {
-					included = true
-					break
-				}
-			}
-			if !included {
+			if !index.MatchesCone(e.Name, sparseDirs) {
 				touched[e.Name] = struct{}{}
 			}
 		}

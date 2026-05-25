@@ -225,14 +225,13 @@ type EndOfIndexEntry struct {
 	Hash plumbing.Hash
 }
 
-// SkipUnless applies sparse-checkout cone semantics to the index: an
-// entry has SkipWorktree cleared iff its path is under one of the
-// directories in patterns. Matching is on /-separated path components,
-// so "dir" does not match "dir-extra" or "dirx". Root-level files
-// (no / in the name) are always kept when patterns is non-empty; this
-// mirrors canonical Git, where path_matches_pattern_list is only
-// invoked while sparse-checkout is active. All other entries are
-// marked SkipWorktree.
+// MatchesCone reports whether name is included under sparse-checkout
+// cone semantics for the given patterns: name is matched against each
+// pattern as a /-separated path-component ancestor, so "dir" does not
+// match "dir-extra" or "dirx". Root-level names (no / in the name) are
+// always included when patterns is non-empty; this mirrors canonical
+// Git, where path_matches_pattern_list is only invoked while
+// sparse-checkout is active.
 //
 // Each pattern is treated as a recursive cone directory: trailing
 // slashes are tolerated, but every pattern is matched as if it ends
@@ -240,6 +239,26 @@ type EndOfIndexEntry struct {
 // via negative ("!dir/*") patterns are not supported — go-git's
 // CheckoutOptions.SparseCheckoutDirectories is a []string of bare
 // directory names, which always map to recursive cones.
+func MatchesCone(name string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+	if !strings.Contains(name, "/") {
+		return true
+	}
+	for _, p := range patterns {
+		if strings.HasPrefix(name, strings.TrimRight(p, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// SkipUnless applies sparse-checkout cone semantics to the index: an
+// entry has SkipWorktree cleared if and only if MatchesCone reports
+// the entry's path as included by patterns. With an empty pattern
+// list, every entry is marked SkipWorktree. See MatchesCone for the
+// matching rules.
 func (i *Index) SkipUnless(patterns []string) {
 	if len(patterns) == 0 {
 		for _, e := range i.Entries {

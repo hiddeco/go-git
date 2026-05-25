@@ -186,6 +186,30 @@ func TestIndexSkipUnless(t *testing.T) {
 	}
 }
 
+func TestMatchesCone(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		path     string
+		patterns []string
+		want     bool
+	}{
+		{"empty patterns excludes all", "any/thing", nil, false},
+		{"root file kept when patterns non-empty", "root.txt", []string{"dir"}, true},
+		{"sibling dir does not match", "dir-extra/x", []string{"dir"}, false},
+		{"descendant matches", "dir/sub/file", []string{"dir"}, true},
+		{"trailing slash tolerated", "a/b/c", []string{"a/b/"}, true},
+		{"multi-slash tolerated", "dir/x", []string{"dir//"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, MatchesCone(tc.path, tc.patterns))
+		})
+	}
+}
+
 func TestIndexGlob(t *testing.T) {
 	t.Parallel()
 	idx := &Index{
