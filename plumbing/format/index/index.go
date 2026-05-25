@@ -225,24 +225,42 @@ type EndOfIndexEntry struct {
 	Hash plumbing.Hash
 }
 
-// SkipUnless applies patterns in the form of A, A/B, A/B/C
-// to the index to prevent the files from being checked out.
-// Files whose names match one of the patterns have SkipWorktree cleared;
-// all other files have it set. This handles sparse-checkout dir switching
-// correctly: files moving into the active set are un-skipped.
+// SkipUnless applies sparse-checkout cone semantics to the index: an
+// entry has SkipWorktree cleared iff its path is under one of the
+// directories in patterns. Matching is on /-separated path components,
+// so "dir" does not match "dir-extra" or "dirx". Root-level files
+// (no / in the name) are always kept when patterns is non-empty; this
+// mirrors canonical Git, where path_matches_pattern_list is only
+// invoked while sparse-checkout is active. All other entries are
+// marked SkipWorktree.
+//
+// Each pattern is treated as a recursive cone directory: trailing
+// slashes are tolerated, but every pattern is matched as if it ends
+// in "/". Non-cone glob patterns and canonical's leaf-cone promotion
+// via negative ("!dir/*") patterns are not supported — go-git's
+// CheckoutOptions.SparseCheckoutDirectories is a []string of bare
+// directory names, which always map to recursive cones.
 func (i *Index) SkipUnless(patterns []string) {
-	for _, e := range i.Entries {
-		var include bool
-		for _, pattern := range patterns {
-			if strings.HasPrefix(e.Name, pattern) {
-				include = true
-				break
-			}
-		}
-		if include {
-			e.SkipWorktree = false
-		} else {
+	if len(patterns) == 0 {
+		for _, e := range i.Entries {
 			e.SkipWorktree = true
 		}
+		return
+	}
+	normalized := make([]string, len(patterns))
+	for j, p := range patterns {
+		normalized[j] = strings.TrimRight(p, "/") + "/"
+	}
+	for _, e := range i.Entries {
+		include := !strings.Contains(e.Name, "/")
+		if !include {
+			for _, p := range normalized {
+				if strings.HasPrefix(e.Name, p) {
+					include = true
+					break
+				}
+			}
+		}
+		e.SkipWorktree = !include
 	}
 }

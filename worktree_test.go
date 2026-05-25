@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -627,17 +626,20 @@ func (s *WorktreeSuite) TestCheckoutSparse() {
 	fis, err := fs.ReadDir("/")
 	s.NoError(err)
 
-	for _, fi := range fis {
-		s.True(fi.IsDir())
-		var oneOfSparseCheckoutDirs bool
-
-		for _, sparseCheckoutDirectory := range sparseCheckoutDirectories {
-			if strings.HasPrefix(fi.Name(), sparseCheckoutDirectory) {
-				oneOfSparseCheckoutDirs = true
-			}
-		}
-		s.True(oneOfSparseCheckoutDirs)
+	sparseSet := make(map[string]struct{}, len(sparseCheckoutDirectories))
+	for _, d := range sparseCheckoutDirectories {
+		sparseSet[d] = struct{}{}
 	}
+	var sawRootFile bool
+	for _, fi := range fis {
+		if !fi.IsDir() {
+			sawRootFile = true
+			continue // root-level files are always kept under cone semantics
+		}
+		_, ok := sparseSet[fi.Name()]
+		s.True(ok, "unexpected directory %q in sparse checkout", fi.Name())
+	}
+	s.True(sawRootFile, "expected at least one root-level file to be kept under cone semantics")
 }
 
 func (s *WorktreeSuite) TestCheckoutCRLF() {
@@ -2064,8 +2066,22 @@ func (s *WorktreeSuite) TestResetSparsely() {
 
 	files, err := fs.ReadDir("/")
 	s.NoError(err)
-	s.Len(files, 1)
-	s.Equal("php", files[0].Name())
+	var dirs []string
+	for _, fi := range files {
+		if fi.IsDir() {
+			dirs = append(dirs, fi.Name())
+		}
+	}
+	s.Equal([]string{"php"}, dirs)
+
+	var sawRootFile bool
+	for _, fi := range files {
+		if !fi.IsDir() {
+			sawRootFile = true
+			break
+		}
+	}
+	s.True(sawRootFile, "expected a root-level file to be kept under cone semantics")
 
 	files, err = fs.ReadDir("/php")
 	s.NoError(err)

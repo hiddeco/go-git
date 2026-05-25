@@ -92,6 +92,100 @@ func TestIndexRemove(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEntryNotFound)
 }
 
+func TestIndexSkipUnless(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		patterns []string
+		entries  []struct {
+			name string
+			skip bool
+		}
+	}{
+		{
+			name:     "cone dir does not match siblings; root files always kept",
+			patterns: []string{"dir"},
+			entries: []struct {
+				name string
+				skip bool
+			}{
+				{"dir/a", false},
+				{"dir-extra/b", true},
+				{"dirx/c", true},
+				{"root.txt", false},
+			},
+		},
+		{
+			name:     "empty pattern list skips every entry",
+			patterns: nil,
+			entries: []struct {
+				name string
+				skip bool
+			}{
+				{"dir/a", true},
+				{"root.txt", true},
+			},
+		},
+		{
+			name:     "nested cone dir matches descendants only",
+			patterns: []string{"a/b/"},
+			entries: []struct {
+				name string
+				skip bool
+			}{
+				{"a/b/c", false},
+				{"a/b-other/d", true},
+				{"a/c/d", true},
+			},
+		},
+		{
+			name:     "pattern with multiple trailing slashes still matches",
+			patterns: []string{"dir//"},
+			entries: []struct {
+				name string
+				skip bool
+			}{
+				{"dir/a", false},
+				{"dir-x/b", true},
+				{"root", false},
+			},
+		},
+		{
+			name:     "pattern without trailing slash and with trailing slash agree",
+			patterns: []string{"a", "b/"},
+			entries: []struct {
+				name string
+				skip bool
+			}{
+				{"a/x", false},
+				{"ax/y", true},
+				{"b/x", false},
+				{"bx/y", true},
+				{"root", false},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			idx := &Index{}
+			for _, want := range tc.entries {
+				idx.Entries = append(idx.Entries, &Entry{Name: want.name})
+			}
+
+			idx.SkipUnless(tc.patterns)
+
+			for i, e := range idx.Entries {
+				assert.Equal(t, tc.entries[i].skip, e.SkipWorktree,
+					"SkipWorktree for %q", e.Name)
+			}
+		})
+	}
+}
+
 func TestIndexGlob(t *testing.T) {
 	t.Parallel()
 	idx := &Index{

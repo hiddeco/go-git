@@ -916,17 +916,20 @@ func (s *RepositorySuite) TestCloneSparse() {
 
 	fis, err := fs.ReadDir(".")
 	s.NoError(err)
-	for _, fi := range fis {
-		s.True(fi.IsDir())
-		var oneOfSparseCheckoutDirs bool
-
-		for _, sparseCheckoutDirectory := range sparseCheckoutDirectories {
-			if strings.HasPrefix(fi.Name(), sparseCheckoutDirectory) {
-				oneOfSparseCheckoutDirs = true
-			}
-		}
-		s.True(oneOfSparseCheckoutDirs)
+	sparseSet := make(map[string]struct{}, len(sparseCheckoutDirectories))
+	for _, d := range sparseCheckoutDirectories {
+		sparseSet[d] = struct{}{}
 	}
+	var sawRootFile bool
+	for _, fi := range fis {
+		if !fi.IsDir() {
+			sawRootFile = true
+			continue // root-level files are always kept under cone semantics
+		}
+		_, ok := sparseSet[fi.Name()]
+		s.True(ok, "unexpected directory %q in sparse checkout", fi.Name())
+	}
+	s.True(sawRootFile, "expected at least one root-level file to be kept under cone semantics")
 }
 
 func (s *RepositorySuite) TestCreateRemoteAndRemote() {
