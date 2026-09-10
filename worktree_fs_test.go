@@ -533,7 +533,8 @@ func TestCherryPickPathValidationMatchesGit(t *testing.T) {
 		// checks that go-git enforces but upstream git does not on this
 		// platform (e.g. reserved device names are only checked by
 		// compat/mingw.c, which is not compiled on non-Windows).
-		skipGit bool
+		skipGit          bool
+		acceptOffWindows bool
 	}{
 		{
 			name: ".git at root",
@@ -585,16 +586,18 @@ func TestCherryPickPathValidationMatchesGit(t *testing.T) {
 			skipGit: !gitAtLeast(t, 2, 24),
 		},
 		{
-			name:    "NTFS reserved device name CON",
-			path:    "CON/file",
-			config:  map[string]string{"core.protectNTFS": "true"},
-			skipGit: runtime.GOOS != "windows",
+			name:             "NTFS reserved device name CON",
+			acceptOffWindows: true,
+			path:             "CON/file",
+			config:           map[string]string{"core.protectNTFS": "true"},
+			skipGit:          runtime.GOOS != "windows",
 		},
 		{
-			name:    "NTFS reserved device name NUL",
-			path:    "NUL",
-			config:  map[string]string{"core.protectNTFS": "true"},
-			skipGit: runtime.GOOS != "windows",
+			name:             "NTFS reserved device name NUL",
+			acceptOffWindows: true,
+			path:             "NUL",
+			config:           map[string]string{"core.protectNTFS": "true"},
+			skipGit:          runtime.GOOS != "windows",
 		},
 		{
 			name:   "HFS+ zero-width character in .git",
@@ -644,6 +647,12 @@ func TestCherryPickPathValidationMatchesGit(t *testing.T) {
 				&CommitOptions{Author: defaultSignature(), AllowEmptyCommits: true},
 				TheirsMergeStrategy, badCommit,
 			)
+			if tc.acceptOffWindows && runtime.GOOS != "windows" {
+				require.NoError(t, goGitErr)
+				_, err := w.Filesystem().Lstat(tc.path)
+				require.NoError(t, err)
+				return
+			}
 			assert.Error(t, goGitErr, "go-git should reject cherry-pick of %q", tc.path)
 
 			if !tc.skipGit {
@@ -1374,60 +1383,66 @@ func TestMoveRejectsDangerousDestinations(t *testing.T) {
 	}
 }
 
+// TestValidPathProtectNTFS runs every row against both hosts. Setting
+// worktreeFilesystem.win32 by hand rather than reading runtime.GOOS is
+// what makes the Win32 half reachable from a POSIX test run: with a
+// runtime.GOOS test in validPath, deleting the Windows policy outright
+// still passes the suite everywhere but Windows.
 func TestValidPathProtectNTFS(t *testing.T) {
 	t.Parallel()
 
-	fs := newWorktreeFilesystem(memfs.New(), true, false)
-
 	tests := []struct {
-		path    string
-		wantErr bool
+		path string
+		// win32 is the verdict on a Win32 host, posix on every other.
+		win32, posix bool
 	}{
-		{".git . . .", true},
-		{".git . . ", true},
-		{".git ", true},
-		{".git.", true},
-		{".git::$INDEX_ALLOCATION", true},
-		{"CON", true},
-		{"aux.txt", true},
-		{"sub/NUL", true},
-		{"sub/COM1.txt", true},
-		{"CONIN$", true},
-		{"foo ", true},
-		{"foo.", true},
-		{"sub /x", true},
-		{".gitattributes ", true},
-		{".gitignore ", true},
-		{"...", true},
-		{"....", true},
-		{"a..b", false},
-		{"foo", false},
-		{"readme.md", false},
-		{".gitignore", false},
-		{"CONNECT", false},
+		{".git . . .", true, true},
+		{".git . . ", true, true},
+		{".git ", true, true},
+		{".git.", true, true},
+		{".git::$INDEX_ALLOCATION", true, true},
+		{"CON", true, false},
+		{"aux.txt", true, false},
+		{"sub/NUL", true, false},
+		{"sub/COM1.txt", true, false},
+		{"CONIN$", true, false},
+		{"foo ", true, false},
+		{"foo.", true, false},
+		{"sub /x", true, false},
+		{".gitattributes ", true, false},
+		{".gitignore ", true, false},
+		{"...", true, false},
+		{"....", true, false},
+		// Volume prefixes are a Win32 rule too, and independent of
+		// core.protectNTFS.
+		{"\\\\a\\b", true, false},
+		{"C:\\a\\b", true, false},
+		{"a..b", false, false},
+		{"foo", false, false},
+		{"readme.md", false, false},
+		{".gitignore", false, false},
+		{"CONNECT", false, false},
 	}
 
-	if runtime.GOOS == "windows" {
-		// filepath.VolumeName only parses volume names on Windows.
-		tests = append(tests, []struct {
-			path    string
-			wantErr bool
-		}{
-			{"\\\\a\\b", true},
-			{"C:\\a\\b", true},
-		}...)
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.path, func(t *testing.T) {
-			t.Parallel()
-			err := fs.validPath(tc.path)
-			if tc.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
+	for _, win32 := range []bool{false, true} {
+		for _, tc := range tests {
+			t.Run(fmt.Sprintf("%s/win32=%t", tc.path, win32), func(t *testing.T) {
+				t.Parallel()
+				fs := newWorktreeFilesystem(memfs.New(), true, false)
+				fs.win32 = win32
+				wantErr := tc.posix
+				if win32 {
+					wantErr = tc.win32
+				}
+				err := fs.validPath(tc.path)
+				if wantErr {
+					assert.Error(t, err)
+					assert.ErrorIs(t, err, pathutil.ErrInvalidPath)
+				} else {
+					assert.NoError(t, err)
+				}
+			})
+		}
 	}
 }
 

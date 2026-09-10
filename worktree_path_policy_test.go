@@ -2,6 +2,8 @@ package git
 
 import (
 	"fmt"
+	"os"
+	"runtime"
 	"testing"
 
 	"github.com/go-git/go-billy/v6/memfs"
@@ -50,6 +52,50 @@ func TestValidPathRejectsDotGitEveryPosition(t *testing.T) {
 	}
 }
 
+func TestValidPathAcceptsPOSIXNamesOffWindows(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		path          string
+		win32, volume bool
+	}{
+		{"trail.", true, false},
+		{"trail ", true, false},
+		{".../inner.txt", true, false},
+		{"sub /x", true, false},
+		{". /inner.txt", true, false},
+		{".\u200c/inner.txt", false, false},
+		{".gitattributes ", true, false},
+		{".gitignore ", true, false},
+		{".mailmap ", true, false},
+		{"gi7eba~1", false, false},
+		{"aux.c", true, false},
+		{"lib/con.go", true, false},
+		{"C:foo", false, true},
+		{"a:b", false, true},
+		{"C:/x", false, true},
+		{`\\srv\share\x`, false, true},
+		{`\??\C:\x`, false, true},
+		{".gitattributes /inner.txt", true, false},
+	} {
+		for _, ntfs := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%q/ntfs=%t", tc.path, ntfs), func(t *testing.T) {
+				t.Parallel()
+				fs := newWorktreeFilesystem(memfs.New(), ntfs, false)
+				err := fs.validPath(tc.path)
+				if runtime.GOOS == "windows" && (tc.volume || ntfs && tc.win32) {
+					require.Error(t, err)
+					if !tc.volume {
+						require.Contains(t, err.Error(), "core.protectNTFS")
+					}
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+}
+
+//nolint:paralleltest // Exercise Clean first, with a fresh fixture for each operation.
 func TestWorktreeOperationsSurviveDotGitDisguises(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{".git", "git~1", ".GIT", "sub/.GIT", "sub/git~1", "sub/.git", ".git\u200c", "sub/.git\u200c"} {
@@ -101,3 +147,48 @@ func TestWorktreeOperationsSurviveDotGitDisguises(t *testing.T) {
 }
 
 //nolint:paralleltest // Exercise Clean first, with a fresh fixture for each operation.
+func TestWorktreeAPISurvivesUntrackedEdgeNames(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX filenames")
+	}
+	for _, name := range []string{"build ", ". ", ".\u200c", ".gitattributes ", ".gitignore ", ".mailmap ", "gi7eba~1", ".GITIGNORE ", "a:b", "aux.c"} {
+		for _, directory := range []bool{false, true} {
+			for _, op := range []string{"Clean", "Status", "AddUnrelated", "AddGlob", "AddAll", "AddName"} {
+				t.Run(fmt.Sprintf("%q/directory=%t/%s", name, directory, op), func(t *testing.T) {
+					fs := memfs.New()
+					r, err := Init(memory.NewStorage(), WithWorkTree(fs))
+					require.NoError(t, err)
+					w, err := r.Worktree()
+					require.NoError(t, err)
+					p := name
+					if directory {
+						p += "/inner.txt"
+					}
+					require.NoError(t, util.WriteFile(fs, p, []byte("content"), 0o644))
+					require.NoError(t, util.WriteFile(fs, "unrelated.txt", []byte("safe"), 0o644))
+					switch op {
+					case "Clean":
+						require.NoError(t, w.Clean(&CleanOptions{Dir: true}))
+						_, err = fs.Lstat(name)
+						require.ErrorIs(t, err, os.ErrNotExist)
+					case "Status":
+						status, err := w.Status()
+						require.NoError(t, err)
+						require.Contains(t, status, p)
+					case "AddUnrelated":
+						_, err = w.Add("unrelated.txt")
+						require.NoError(t, err)
+					case "AddGlob":
+						require.NoError(t, w.AddGlob("."))
+					case "AddAll":
+						require.NoError(t, w.AddWithOptions(&AddOptions{All: true}))
+					case "AddName":
+						_, err = w.Add(name)
+						require.NoError(t, err)
+					}
+				})
+			}
+		}
+	}
+}
