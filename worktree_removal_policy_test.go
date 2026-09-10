@@ -68,7 +68,7 @@ func TestRemovalPreservesGitlinkSubtree(t *testing.T) {
 			require.NoError(t, rmFileAndDirsIfEmpty(wrapped, "tracked.txt"))
 			require.Equal(t, map[string]string{"tracked.txt/": "", "tracked.txt/precious": "keep"}, snapshotSubtree(t, raw, "tracked.txt"))
 		})
-		for _, name := range []string{".git", "a/.git/b"} {
+		for _, name := range []string{".git", "a/.git/b", "sub/.GIT", "sub/git~1"} {
 			for _, directory := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/refuse/%q/directory=%t", backend, name, directory), func(t *testing.T) {
 					t.Parallel()

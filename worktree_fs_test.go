@@ -49,8 +49,8 @@ func TestValidPath(t *testing.T) {
 		{".", true},
 		{"a/.git/b", true},
 		{"a\\.git\\b", true},
-		{"a/.git", false},
-		{"a\\.git", false},
+		{"a/.git", true},
+		{"a\\.git", true},
 		{"a\x01b", true},     // explicit byte-oriented control-char rejection
 		{"foo\x7fbar", true}, // DEL byte
 	}
@@ -76,7 +76,6 @@ func TestWorktreeFilesystemRejectsInvalidPaths(t *testing.T) {
 	badPaths := []string{
 		".git/config",
 		".git/objects/pack/file",
-		"git~1/HEAD",
 		"../escape",
 		"a/../../etc/passwd",
 	}
@@ -232,7 +231,6 @@ func TestWorktreeFilesystemSymlinkRejectsDangerousLinkNames(t *testing.T) {
 		".git",
 		".git/config",
 		".git/hooks/pre-commit",
-		"git~1/HEAD",
 		"../escape",
 		"a/../../etc/passwd",
 	}
@@ -490,7 +488,7 @@ func TestWorktreeFilesystemAbsolutePaths(t *testing.T) {
 		{"allow /readme.md", "/readme.md", false},
 		{"allow /src/main.go", "/src/main.go", false},
 		{"allow /.gitignore", "/.gitignore", false},
-		{"allow /submodule/.git", "/submodule/.git", false},
+		{"reject /submodule/.git", "/submodule/.git", true},
 	}
 
 	for _, tc := range tests {
@@ -1289,7 +1287,7 @@ func TestForceCheckoutReplacesLeadingSymlink(t *testing.T) {
 // Windows reserved device names are not exercised here: they are
 // legitimate filenames on non-Windows and upstream Git accepts them, so
 // the strict tree-side gate also accepts them. The wrapper rejects them
-// at materialisation time when core.protectNTFS is on; that path is
+// on Windows when core.protectNTFS is on; that path is
 // covered by TestValidPathProtectNTFS.
 func TestAddRejectsDangerousPaths(t *testing.T) {
 	t.Parallel()
@@ -1395,6 +1393,15 @@ func TestValidPathProtectNTFS(t *testing.T) {
 		{"sub/NUL", true},
 		{"sub/COM1.txt", true},
 		{"CONIN$", true},
+		{"foo ", true},
+		{"foo.", true},
+		{"sub /x", true},
+		{".gitattributes ", true},
+		{".gitignore ", true},
+		{"...", true},
+		{"....", true},
+		{"a..b", false},
+		{"foo", false},
 		{"readme.md", false},
 		{".gitignore", false},
 		{"CONNECT", false},
@@ -1434,6 +1441,12 @@ func TestValidPathProtectNTFSDisabled(t *testing.T) {
 		".git ",
 		".git.",
 		".git::$INDEX_ALLOCATION",
+		"foo ",
+		"foo.",
+		"sub /x",
+		".gitattributes ",
+		"...",
+		"....",
 	}
 
 	for _, p := range paths {
@@ -1647,10 +1660,9 @@ func TestValidPathRejectsDotDotDisguisesWithProtectionOff(t *testing.T) {
 	}
 }
 
-// TestValidPathAllowsDotsOnlyWithProtectionOff is the other side of
-// the same line. A component of periods alone folds to ".." on NTFS
-// and nowhere else, so it belongs to WindowsValidPath under
-// core.protectNTFS rather than to the always-on check above.
+// TestValidPathAllowsDotsOnlyWithProtectionOff checks that the Win32
+// trailing rule is disabled with core.protectNTFS off. It applies only
+// on Windows and is separate from the always-on dot/parent check.
 func TestValidPathAllowsDotsOnlyWithProtectionOff(t *testing.T) {
 	t.Parallel()
 
