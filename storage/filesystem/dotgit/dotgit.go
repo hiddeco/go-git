@@ -117,10 +117,12 @@ func isPathSep(r rune) bool { return r == '/' || r == '\\' }
 // hardening that IsSafe's literal check does not cover: control characters, and
 // components a case-insensitive/NTFS/HFS+ filesystem would fold back to "." or
 // ".." (trailing dots/spaces, Alternate Data Streams, ignorable Unicode code
-// points). The per-component check is delegated to pathutil.IsHFSDot and
-// pathutil.IsNTFSDot with "." as the needle, exactly as validSubmoduleName
-// does, and runs regardless of host OS because a name can be authored on one OS
-// and reach this layer on another.
+// points). The per-component check is delegated to
+// pathutil.IsDotOrDotDotName, exactly as validSubmoduleName does, and runs
+// regardless of host OS because a name can be authored on one OS and reach
+// this layer on another. pathutil.IsDotsOnlyName adds a periods-only storage
+// name policy. check_refname_format also forbids ".." in a refname; this
+// does not assert that NTFS resolves arbitrary periods-only names to a parent.
 func validReferenceName(name plumbing.ReferenceName) error {
 	if !name.IsSafe() {
 		return fmt.Errorf("%w: %q is not under refs/ nor a valid pseudo-ref", ErrReferenceNameEscape, string(name))
@@ -133,9 +135,7 @@ func validReferenceName(name plumbing.ReferenceName) error {
 		}
 	}
 	for _, part := range strings.FieldsFunc(s, isPathSep) {
-		// IsNTFSDot/IsHFSDot with a "." needle match ".." and its disguises
-		// but not a bare ".", so reject that component explicitly too.
-		if part == "." || pathutil.IsHFSDot(part, ".") || pathutil.IsNTFSDot(part, ".", "") {
+		if pathutil.IsDotsOnlyName(part) || pathutil.IsDotOrDotDotName(part) {
 			return fmt.Errorf("%w: %q", ErrReferenceNameEscape, s)
 		}
 	}
@@ -1638,7 +1638,19 @@ func (d *DotGit) PackRefs() (err error) {
 // cleaned. The config-layer parser also validates submodule names,
 // but Module may be reached from any caller that constructs a
 // Submodule struct programmatically and so bypasses the parser.
+//
+// path.Clean folds only the literal "..", so the per-component check
+// applies the same predicates as validReferenceName: a component a
+// case-insensitive, NTFS or HFS+ filesystem folds back to "." or ".."
+// names the parent of modules/ even though the cleaned string stays
+// under it, and a periods-only component is refused as a storage name
+// here for the same reason it is refused there.
 func (d *DotGit) Module(name string) (billy.Filesystem, error) {
+	for _, part := range strings.FieldsFunc(name, isPathSep) {
+		if pathutil.IsDotsOnlyName(part) || pathutil.IsDotOrDotDotName(part) {
+			return nil, ErrModuleNameEscape
+		}
+	}
 	p := d.fs.Join(modulePath, name)
 	cleaned := path.Clean(filepath.ToSlash(p))
 	if cleaned != modulePath && !strings.HasPrefix(cleaned, modulePath+"/") {
