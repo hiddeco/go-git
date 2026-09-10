@@ -77,7 +77,8 @@ func writeRawObject(t *testing.T, s *memory.Storage, typ plumbing.ObjectType, pa
 
 func encodeObject(t *testing.T, s *memory.Storage, e interface {
 	Encode(plumbing.EncodedObject) error
-}) plumbing.Hash {
+},
+) plumbing.Hash {
 	t.Helper()
 
 	o := s.NewEncodedObject()
@@ -137,9 +138,7 @@ func TestResetHardRefusesTreeDerivedDotDotDisguise(t *testing.T) {
 			blob := writeRawObject(t, s, plumbing.BlobObject, []byte("payload\n"))
 
 			// Hostile tree: one regular-file entry named ".. ".
-			var payload []byte
-			payload = append(payload, fmt.Sprintf("%o %s", 0o100644, hostile)...)
-			payload = append(payload, 0x00)
+			payload := fmt.Appendf(nil, "%o %s\x00", 0o100644, hostile)
 			payload = append(payload, blob.Bytes()...)
 			hostileTree := writeRawObject(t, s, plumbing.TreeObject, payload)
 
@@ -176,7 +175,8 @@ func TestResetHardRefusesTreeDerivedDotDotDisguise(t *testing.T) {
 			head, err := r.Reference(plumbing.HEAD, false)
 			require.NoError(t, err)
 			require.NoError(t, s.SetReference(
-				plumbing.NewHashReference(head.Target(), hostileCommit)))
+				plumbing.NewHashReference(head.Target(), hostileCommit),
+			))
 
 			w, err := r.Worktree()
 			require.NoError(t, err)
