@@ -1603,3 +1603,64 @@ func TestWorktreeFilesystemHFSDotGitmodulesSymlinkAllowedWhenProtectionOff(t *te
 	err := fs.Symlink("safe-target", ".g\u200citmodules")
 	assert.NoError(t, err, "HFS variant should be allowed when protectHFS is off")
 }
+
+// TestValidPathRejectsDotDotDisguisesWithProtectionOff pins the
+// disguise check as independent of core.protectNTFS and
+// core.protectHFS. It has to be: resetWorktreeToTree's first pass
+// takes its delete paths from diffTrees, whose treeNoder sets
+// TreeWalker.skipPathValidation, so those names never meet
+// pathutil.ValidTreePath and this wrapper is their only gate. The
+// index decoder does not validate entry names either. Turning
+// core.protectNTFS off is a statement about NTFS canonicalisation,
+// not consent to a parent hop.
+func TestValidPathRejectsDotDotDisguisesWithProtectionOff(t *testing.T) {
+	t.Parallel()
+
+	fs := newWorktreeFilesystem(memfs.New(), false, false)
+
+	paths := []string{
+		"..",
+		"../x",
+		".. ",
+		".. /x",
+		"..  /x",
+		".. ./x",
+		"..:$DATA/x",
+		"..:x/x",
+		"..::$INDEX_ALLOCATION/x",
+		".\u200c./x",
+		"\u200c../x",
+		"..\u200c/x",
+		"a/.. /b",
+		"a\\.. \\b",
+		"a/.\u200c./b",
+		".",
+		"a/./b",
+	}
+
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			assert.Error(t, fs.validPath(p),
+				"validPath(%q) must be refused with both protections off", p)
+		})
+	}
+}
+
+// TestValidPathAllowsDotsOnlyWithProtectionOff is the other side of
+// the same line. A component of periods alone folds to ".." on NTFS
+// and nowhere else, so it belongs to WindowsValidPath under
+// core.protectNTFS rather than to the always-on check above.
+func TestValidPathAllowsDotsOnlyWithProtectionOff(t *testing.T) {
+	t.Parallel()
+
+	fs := newWorktreeFilesystem(memfs.New(), false, false)
+
+	for _, p := range []string{"...", "....", "a/.../b", "x..", ".. x", ". "} {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+			assert.NoError(t, fs.validPath(p),
+				"validPath(%q) must be allowed with core.protectNTFS off", p)
+		})
+	}
+}
